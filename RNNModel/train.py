@@ -17,28 +17,39 @@ def masked_bce_with_logits(logits, targets, mask):
     return (bce * mask3).sum() / mask3.sum()
 
 @torch.no_grad()
-def validate(model, loader, device, threshold=0.3):
+def validate(model, loader, device, threshold=0.1):
     model.eval()
-    all_logits = []
-    all_true = []
-    total_loss = 0.0
-    total_n = 0
+    all_logits_flat, all_true_flat = [], []
+    total_loss, total_n = 0.0, 0
+
     for x, y, lengths, mask in loader:
-        x = x.to(device)
-        y = y.to(device)
-        mask = mask.to(device)
+        x, y, mask = x.to(device), y.to(device), mask.to(device)
         logits, _ = model(x)
         loss = masked_bce_with_logits(logits, y, mask)
-        batch_n = mask.sum().item()
         total_loss += loss.item() * x.size(0)
-        all_logits.append(logits.cpu().numpy())
-        all_true.append(y.cpu().numpy())
+
+        # ---- Extract valid time steps (according to mask) ----
+        mask_np = mask.cpu().numpy().astype(bool)
+        logits_np = logits.cpu().numpy()[mask_np.squeeze()]  # shape (M, k)
+        y_np = y.cpu().numpy()[mask_np.squeeze()]             # shape (M, k)
+
+        all_logits_flat.append(logits_np)
+        all_true_flat.append(y_np)
         total_n += x.size(0)
-    all_logits = np.concatenate(all_logits, axis=0)
-    all_true = np.concatenate(all_true, axis=0)
+
+    # Concatenate all valid frames
+    all_logits_flat = np.concatenate(all_logits_flat, axis=0)  # (T_total, k)
+    all_true_flat = np.concatenate(all_true_flat, axis=0)      # (T_total, k)
+
+    # Add a batch dimension artificially (N=1, L=T_total, k)
+    all_logits = all_logits_flat[None, :, :]
+    all_true = all_true_flat[None, :, :]
+
+    # Compute probabilities and evaluation metrics
     probs = 1.0 / (1.0 + np.exp(-all_logits))
-    metrics = f1_metrics_window(all_true, probs,threshold=threshold, window=4)
+    metrics = f1_metrics_window(all_true, probs, threshold=threshold, window=4)
     avg_loss = total_loss / total_n
+
     return avg_loss, metrics, probs, all_true
 
 def train_epoch(model, loader, optimizer, device):
@@ -117,3 +128,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
