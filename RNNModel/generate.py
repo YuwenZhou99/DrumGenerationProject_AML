@@ -97,7 +97,7 @@ def main():
         seed = seq[:seed_len].astype(np.float32)
         print(f"\n[{i}] source={fname}, seed shape={seed.shape}")
 
-        gen = generate_from_seed(model, seed, steps=1024, device=device, threshold=0.5)
+        gen = generate_from_seed(model, seed, steps=1024, device=device, threshold=0.2,sample = True)
         print(f"Generated shape: {gen.shape}")
 
         # save CSV with original-like columns
@@ -109,3 +109,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
