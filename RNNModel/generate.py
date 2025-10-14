@@ -55,58 +55,69 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    # select 10 random files as seeds
-    all_csv = [f for f in sorted(os.listdir(data_folder)) if f.endswith(".csv")]
-    if len(all_csv) == 0:
-        raise RuntimeError("No CSV in data_folder")
-    selected_files = random.sample(all_csv, min(10, len(all_csv)))
-    print("\nSelected original files:")
-    for f in selected_files:
-        print(" -", f)
-    for f in selected_files:
-        shutil.copy2(os.path.join(data_folder, f), os.path.join(selected_folder, f))
+       # ---------- 1. Train ----------
+    seqs = load_folder_as_sequences(data_folder, compress_window=4)
+    print("Total sequences:", len(seqs))
+    idx = np.random.permutation(len(seqs))
+    split = int(len(seqs) * 0.7)
+    train_seqs = [seqs[i] for i in idx[:split]]
+    val_seqs = [seqs[i] for i in idx[split:]]
 
-    # load checkpoint first to discover expected k
-    ck = torch.load(model_path, map_location="cpu")
-    if "model_state" in ck and "fc.weight" in ck["model_state"]:
-        k_expected = ck["model_state"]["fc.weight"].shape[0]
+    train_ds = ShortDrumDataset(train_seqs)
+    val_ds = ShortDrumDataset(val_seqs)
+    train_loader = DataLoader(train_ds, batch_size=32, shuffle=True, collate_fn=collate_pad)
+    val_loader = DataLoader(val_ds, batch_size=32, shuffle=False, collate_fn=collate_pad)
+
+    k = seqs[0].shape[1]
+    model = DrumRNN(input_dim=k, hidden_dim=128, num_layers=2, dropout=0.3).to(device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+
+    best_val = float("inf")
+    threshold = 0.1
+
+    for epoch in range(1, 21):
+        tr_loss = train_epoch(model, train_loader, optimizer, device)
+        val_loss, val_metrics, probs, all_true = validate(model, val_loader, device, threshold)
+        print(f"Epoch {epoch}: train_bce={tr_loss:.4f} val_bce={val_loss:.4f} "
+              f"micro_f1={val_metrics['micro_f1']:.4f} macro_f1={val_metrics['macro_f1']:.4f}")
+
+        if val_loss < best_val:
+            best_val = val_loss
+            save_model(model_path, model, optimizer, epoch=epoch,
+                       meta={"val_loss": val_loss, "metrics": val_metrics})
+            print("Saved best model to", model_path)
+
+    # ---------- 2. Generate ----------
+    if os.path.exists(out_folder):
+        for f in os.listdir(out_folder):
+           os.remove(os.path.join(out_folder, f))
+        print(f"Cleared old files in {out_folder}")
     else:
-        meta = ck.get("meta", {})
-        master_cols = meta.get("master_columns", None)
-        k_expected = len(master_cols)
+         os.makedirs(out_folder)
 
-    # load the model
-    model = DrumRNN(input_dim=k_expected)
+    model = DrumRNN(input_dim=k)
     load_model(model_path, model, map_location=device)
-    model.to(device)
-    model.eval()
-    print("Model loaded and ready.")
+    model.to(device).eval()
+    print("\nModel loaded for generation.")
 
-    # build master columns from the FULL dataset folder (to align columns as in training)
     master_columns = build_master_columns(data_folder)
+    all_csv = [f for f in sorted(os.listdir(data_folder)) if f.endswith(".csv")]
+    selected_files = random.sample(all_csv, min(5, len(all_csv)))
 
-    # for each selected file, load using master and generate
     for i, fname in enumerate(selected_files, 1):
         path = os.path.join(data_folder, fname)
         seq = load_csv_to_grid_with_master(path, master_columns)
         if seq.shape[0] < 64:
-            print(f"Skipping {fname} because too short ({seq.shape[0]} steps)")
             continue
-
-        seed_len = 64
-        seed = seq[:seed_len].astype(np.float32)
-        print(f"\n[{i}] source={fname}, seed shape={seed.shape}")
-
+        seed = seq[:64].astype(np.float32)
         gen = generate_from_seed(model, seed, steps=1024, device=device, threshold=0.2,sample = True)
-        print(f"Generated shape: {gen.shape}")
-
-        # save CSV with original-like columns
         df = pd.DataFrame(gen.astype(int), columns=master_columns)
-        base_name = os.path.splitext(fname)[0]
-        out_path = os.path.join(out_folder, f"gen_{i}_{base_name}_seed{seed_len}.csv")
+        out_path = os.path.join(out_folder, f"gen_{i}_{os.path.splitext(fname)[0]}.csv")
         df.to_csv(out_path, index=False)
-        print(f"Saved generated CSV: {out_path}")
+        print(f"Generated CSV saved: {out_path}")
+
 
 if __name__ == "__main__":
     main()
+
 
