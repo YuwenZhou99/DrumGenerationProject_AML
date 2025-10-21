@@ -71,9 +71,9 @@ def train_epoch(model, loader, optimizer, device):
 def main():
     # adjust the parameters using the command line
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_folder", type=str, required=True)
+    parser.add_argument("--data_folder", type=str, required=True, default="RockBinary_Dataset/RockBinary_Dataset")
     parser.add_argument("--save_path", type=str, default="models/drum_rnn.pt")
-    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--hidden_dim", type=int, default=128)
@@ -106,7 +106,8 @@ def main():
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
 
     # train and validate
-    best_val = float('inf')
+    # best_val = float('inf')
+    best_val = 0.0
     for epoch in range(1, args.epochs + 1):
         tr_loss = train_epoch(model, train_loader, optimizer, device)
         val_loss, val_metrics, probs, all_true = validate(model, val_loader, device, threshold=args.threshold)
@@ -121,9 +122,13 @@ def main():
                 best_f1 = m['micro_f1']
                 best_thr = thr
         print(f" Best val thr={best_thr:.2f} best_micro_f1={best_f1:.4f}")
-        if val_loss < best_val:
-            best_val = val_loss
-            save_model(args.save_path, model, optimizer=optimizer, epoch=epoch, meta={"val_loss": val_loss, "metrics": val_metrics})
+        # if val_loss < best_val:
+        #     best_val = val_loss
+        #     save_model(args.save_path, model, optimizer=optimizer, epoch=epoch, meta={"val_loss": val_loss, "metrics": val_metrics})
+        #     print("Saved best model to", args.save_path)
+        if best_f1 > best_val:
+            best_val = best_f1
+            save_model(args.save_path, model, optimizer=optimizer, epoch=epoch, meta={"val_loss": val_loss, "metrics": val_metrics, "best_thr": best_thr})
             print("Saved best model to", args.save_path)
 
 if __name__ == "__main__":
