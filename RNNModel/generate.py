@@ -10,39 +10,82 @@ from RNNModel import DrumRNN
 
 
 @torch.no_grad()
-def generate_from_seed(model, seed, steps=1024, device="cpu", threshold=0.1, sample=False):
-    """
-    Each step appends the generated next_step to the context and uses the entire context as the next input
-    sample=False: probs>threshold
-    sample=True: torch.bernoulli(use Bernoulli sampling)
-    shape: (L0 + steps, k)
-    """
+def generate_from_seed_groove(
+    model,
+    seed_drums,
+    master_columns,
+    steps=512,
+    device="cpu",
+    temperature=0.8,
+    base_threshold=0.2,
+    max_context=64
+):
+    
     model.eval()
-    # context shape: (1, L0, k)
+    L0 = seed_drums.shape[0]
+    beat_pos = (np.arange(L0) % 64) / 64.0
+    beat_emb = np.stack([np.sin(2*np.pi*beat_pos), np.cos(2*np.pi*beat_pos)], axis=1)
+    seed = np.concatenate([seed_drums, beat_emb], axis=1).astype(np.float32)
+
     context = torch.tensor(seed, dtype=torch.float32, device=device).unsqueeze(0)
-    generated = [seed]
+    generated = []
+
+    
+    kick_idx = next((i for i, c in enumerate(master_columns) if "Kick" in c or "36" in c), None)
+    snare_idx = next((i for i, c in enumerate(master_columns) if "Snare" in c or "38" in c), None)
+    crash_idx = next((i for i, c in enumerate(master_columns) if "Crash" in c or "49" in c), None)
 
     for step in range(steps):
         logits, _ = model(context)
-        probs = torch.sigmoid(logits[:, -1, :])
+        probs = torch.sigmoid(logits[:, -1, :-2] / temperature)
 
-        if sample:
-            next_step = torch.bernoulli(probs)  # random sampling
-        else:
-            next_step = (probs > threshold).float()
+    
+        probs = torch.sigmoid(logits[:, -1, :-2] / temperature)
+        next_drums = torch.bernoulli(probs)   
 
-        # Append next_step to the end of context as the next input
-        context = torch.cat([context, next_step.unsqueeze(1)], dim=1)  # 变为 (1, L0+1+..., k)
-        generated.append(next_step.cpu().numpy())  # append (1,k) numpy
+    
+        if kick_idx is not None and snare_idx is not None:
+            if next_drums[0, kick_idx] == 1 and random.random() < 0.2:
+                next_drums[0, snare_idx] = 0  
 
-        # test steps
-        # if step < 10:
-        #     pm = float(probs.mean().cpu().item())
-        #     pmin = float(probs.min().cpu().item())
-        #     pmax = float(probs.max().cpu().item())
-        #     print(f"[gen-grow] step={step} probs mean={pm:.4f} min={pmin:.4f} max={pmax:.4f}")
+    
+        if crash_idx is not None:
+            if step % 16 == 0 and random.random() < 0.5:
+                next_drums[0, crash_idx] = 1
+            else:
+                next_drums[0, crash_idx] = 0
 
-    return np.vstack([x if isinstance(x, np.ndarray) else x.squeeze(0) for x in generated])
+   
+        for i, c in enumerate(master_columns):
+            if "Hi-Hat" in c or "46" in c:
+                if step % 2 == 1 and random.random() < 0.25:
+                    next_drums[0, i] = 0
+
+   
+        phase = (context.shape[1] % 16) / 16.0
+        beat_emb_next = torch.tensor(
+            [[np.sin(2*np.pi*phase), np.cos(2*np.pi*phase)]],
+            device=device, dtype=next_drums.dtype
+        )
+
+        next_step_full = torch.cat([next_drums, beat_emb_next], dim=1)
+        context = torch.cat([context, next_step_full.unsqueeze(1)], dim=1)
+        if context.shape[1] > max_context:
+            context = context[:, -max_context:, :]
+
+        generated.append(next_drums.cpu().numpy())
+
+
+   
+    drum_seq = np.vstack(generated)
+    L = drum_seq.shape[0]
+    df = pd.DataFrame(drum_seq, columns=master_columns)
+    df.insert(0, "Time_Slot", np.arange(L))
+    df.insert(1, "Measure", df["Time_Slot"] // 64 + 1)
+    df.insert(2, "Beat", (df["Time_Slot"] % 64) // 16 + 1)
+    df.insert(3, "Sub_Beat", (df["Time_Slot"] % 16) + 1)
+
+    return df
 
 def main():
     data_folder = "RockBinary_Dataset"
@@ -56,7 +99,7 @@ def main():
     print(f"Using device: {device}")
 
        # ---------- 1. Train ----------
-    seqs = load_folder_as_sequences(data_folder, compress_window=4)
+    seqs = load_folder_as_sequences(data_folder, compress_window=2)
     print("Total sequences:", len(seqs))
     idx = np.random.permutation(len(seqs))
     split = int(len(seqs) * 0.7)
@@ -68,14 +111,14 @@ def main():
     train_loader = DataLoader(train_ds, batch_size=32, shuffle=True, collate_fn=collate_pad)
     val_loader = DataLoader(val_ds, batch_size=32, shuffle=False, collate_fn=collate_pad)
 
-    k = seqs[0].shape[1]
-    model = DrumRNN(input_dim=k, hidden_dim=128, num_layers=2, dropout=0.3).to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    k = seqs[0].shape[1]+2
+    model = DrumRNN(input_dim=k, hidden_dim=128, num_layers=2, dropout=0.3, bidirectional=True).to(device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
 
     best_val = float("inf")
     threshold = 0.1
 
-    for epoch in range(1, 21):
+    for epoch in range(1, 11):
         tr_loss = train_epoch(model, train_loader, optimizer, device)
         val_loss, val_metrics, probs, all_true = validate(model, val_loader, device, threshold)
         print(f"Epoch {epoch}: train_bce={tr_loss:.4f} val_bce={val_loss:.4f} "
@@ -94,30 +137,28 @@ def main():
         print(f"Cleared old files in {out_folder}")
     else:
          os.makedirs(out_folder)
-
-    model = DrumRNN(input_dim=k)
+    model = DrumRNN(input_dim=k) 
     load_model(model_path, model, map_location=device)
-    model.to(device).eval()
-    print("\nModel loaded for generation.")
-
-    master_columns = build_master_columns(data_folder)
-    all_csv = [f for f in sorted(os.listdir(data_folder)) if f.endswith(".csv")]
-    selected_files = random.sample(all_csv, min(5, len(all_csv)))
+    model.to(device).eval() 
+    print("\nModel loaded for generation.") 
+    master_columns = np.load("master_columns.npy", allow_pickle=True).tolist() 
+    all_csv = [f for f in sorted(os.listdir(data_folder)) if f.endswith(".csv")] 
+    selected_files = random.sample(all_csv, min(5, len(all_csv))) 
 
     for i, fname in enumerate(selected_files, 1):
-        path = os.path.join(data_folder, fname)
-        seq = load_csv_to_grid_with_master(path, master_columns)
-        if seq.shape[0] < 64:
-            continue
-        seed = seq[:64].astype(np.float32)
-        gen = generate_from_seed(model, seed, steps=1024, device=device, threshold=0.2,sample = True)
-        df = pd.DataFrame(gen.astype(int), columns=master_columns)
-        out_path = os.path.join(out_folder, f"gen_{i}_{os.path.splitext(fname)[0]}.csv")
-        df.to_csv(out_path, index=False)
-        print(f"Generated CSV saved: {out_path}")
+        path = os.path.join(data_folder, fname) 
+        seq = load_csv_to_grid_with_master(path, master_columns) 
+        if seq.shape[0] < 64: 
+            continue 
+        seed_drums = seq[:64].astype(np.float32) 
+        df = generate_from_seed_groove(model, seed_drums, master_columns, device=device)
+        out_path = os.path.join(out_folder, f"gen_sparse_{i}_{os.path.splitext(fname)[0]}.csv") 
+        df.to_csv(out_path, index=False) 
+        print(f"Generated sparser CSV saved: {out_path}")
 
 
 if __name__ == "__main__":
     main()
+
 
 
