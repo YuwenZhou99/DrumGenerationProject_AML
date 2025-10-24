@@ -6,7 +6,7 @@ from typing import Dict
 def sigmoid(x):
     return 1.0 / (1.0 + np.exp(-x))
 
-def compress_windows(y: np.ndarray, window: int = 4):
+def compress_windows(y: np.ndarray, window: int = 2):
     """
         Vectorized window-OR compression without mask/hop.
         y: (N, L, k) binary or 0/1 float array.
@@ -29,7 +29,7 @@ def compress_windows(y: np.ndarray, window: int = 4):
     y_comp = (y_reshaped.max(axis=2) > 0).astype(int)  # (N, Lw, k)
     return y_comp
 
-def f1_metrics_window(y_true: np.ndarray, y_prob: np.ndarray, threshold: float = 0.3, window: int = 4) -> Dict[str, float]:
+def f1_metrics_window(y_true: np.ndarray, y_prob: np.ndarray, threshold: float = 0.3, window: int = 2) -> Dict[str, float]:
     """
     Compute micro/macro F1 after compressing every non-overlapping `window` steps by OR.
     y_true, y_prob: (N, L, k)
@@ -97,3 +97,4 @@ def load_model(path: str, model: torch.nn.Module, map_location='cpu'):
     ck = torch.load(path, map_location=map_location)
     model.load_state_dict(ck["model_state"])
     return ck
+
