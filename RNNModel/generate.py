@@ -17,7 +17,6 @@ def generate_from_seed_groove(
     steps=512,
     device="cpu",
     temperature=0.8,
-    base_threshold=0.2,
     max_context=64
 ):
     
@@ -91,6 +90,7 @@ def generate_from_seed_groove(
 
 if __name__ == "__main__":
     main()
+
 
 
 
