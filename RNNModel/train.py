@@ -25,6 +25,8 @@ def validate(model, loader, device, threshold=0.1):
     for x, y, lengths, mask in loader:
         x, y, mask = x.to(device), y.to(device), mask.to(device)
         logits, _ = model(x)
+        logits = logits[:, :, :-2]
+        y = y[:, :, :-2]
         loss = masked_bce_with_logits(logits, y, mask)
         total_loss += loss.item() * x.size(0)
 
@@ -61,6 +63,8 @@ def train_epoch(model, loader, optimizer, device):
         mask = mask.to(device)
         optimizer.zero_grad()
         logits, _ = model(x)
+        logits = logits[:, :, :-2]
+        y = y[:, :, :-2]
         loss = masked_bce_with_logits(logits, y, mask)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -133,4 +137,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
