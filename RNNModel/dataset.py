@@ -96,6 +96,13 @@ class ShortDrumDataset(Dataset):
 
     def __getitem__(self, idx):
         seq = self.seq_list[idx]
+        L, K = seq.shape
+        # ===== adding embedding =====
+        beat_pos = np.arange(L) % 16 / 16.0
+        beat_sin = np.sin(2 * np.pi * beat_pos)[:, None]
+        beat_cos = np.cos(2 * np.pi * beat_pos)[:, None]
+        beat_emb = np.concatenate([beat_sin, beat_cos], axis=1)  # (L, 2)
+        seq_with_beat = np.concatenate([seq, beat_emb], axis=1).astype('float32')  # (L, K+2)
         return torch.from_numpy(seq[:-1]), torch.from_numpy(seq[1:]), seq.shape[0]-1
 
 def collate_pad(batch):
@@ -117,3 +124,4 @@ def collate_pad(batch):
         mask[i, :x.shape[0], 0] = 1.0
     lengths = torch.tensor(lengths, dtype=torch.long)
     return x_pad, y_pad, lengths, mask
+
