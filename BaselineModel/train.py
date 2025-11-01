@@ -28,7 +28,7 @@ def validate(model, loader, device, threshold=0.1):
         loss = masked_bce_with_logits(logits, y, mask)
         total_loss += loss.item() * x.size(0)
 
-        # ---- Extract valid time steps (according to mask) ----
+        # extract valid time steps
         mask_np = mask.cpu().numpy().astype(bool)
         logits_np = logits.cpu().numpy()[mask_np.squeeze()]  # shape (M, k)
         y_np = y.cpu().numpy()[mask_np.squeeze()]             # shape (M, k)
@@ -37,16 +37,18 @@ def validate(model, loader, device, threshold=0.1):
         all_true_flat.append(y_np)
         total_n += x.size(0)
 
-    # Concatenate all valid frames
+    # concatenate all valid frames
     all_logits_flat = np.concatenate(all_logits_flat, axis=0)  # (T_total, k)
     all_true_flat = np.concatenate(all_true_flat, axis=0)      # (T_total, k)
 
-    # Add a batch dimension artificially (N=1, L=T_total, k)
+    # add a batch dimension artificially
     all_logits = all_logits_flat[None, :, :]
     all_true = all_true_flat[None, :, :]
 
-    # Compute probabilities and evaluation metrics
+    # compute probabilities
     probs = 1.0 / (1.0 + np.exp(-all_logits))
+
+    # evaluate metrics
     metrics = f1_metrics_window(all_true, probs, threshold=threshold, window=4)
     avg_loss = total_loss / total_n
 

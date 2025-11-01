@@ -12,18 +12,17 @@ from BaselineModel import DrumLogisticRegression
 @torch.no_grad()
 def generate_from_seed(model, seed, steps=1024, device="cpu", threshold=0.1, sample=False):
     """
-    Each step appends the generated next_step to the context and uses the entire context as the next input
+    Each step appends the generated next_step to the context and uses the entire context as the next input.
     sample=False: probs>threshold
-    sample=True: torch.bernoulli(use Bernoulli sampling)
+    sample=True: torch.bernoulli(Bernoulli sampling)
     shape: (L0 + steps, k)
     """
     model.eval()
-    # context shape: (1, L0, k)
+    # context shape (1, L0, k)
     context = torch.tensor(seed, dtype=torch.float32, device=device).unsqueeze(0)
     generated = [seed]
 
     for step in range(steps):
-        # The baseline model only returns a single tensor (logits)
         logits = model(context)
         probs = torch.sigmoid(logits[:, -1, :])
 
@@ -32,16 +31,9 @@ def generate_from_seed(model, seed, steps=1024, device="cpu", threshold=0.1, sam
         else:
             next_step = (probs > threshold).float()
 
-        # Append next_step to the end of context as the next input
-        context = torch.cat([context, next_step.unsqueeze(1)], dim=1)  # 变为 (1, L0+1+..., k)
-        generated.append(next_step.cpu().numpy())  # append (1,k) numpy
-
-        # test steps
-        # if step < 10:
-        #     pm = float(probs.mean().cpu().item())
-        #     pmin = float(probs.min().cpu().item())
-        #     pmax = float(probs.max().cpu().item())
-        #     print(f"[gen-grow] step={step} probs mean={pm:.4f} min={pmin:.4f} max={pmax:.4f}")
+        # Append next_step to the end of context
+        context = torch.cat([context, next_step.unsqueeze(1)], dim=1)
+        generated.append(next_step.cpu().numpy())
 
     return np.vstack([x if isinstance(x, np.ndarray) else x.squeeze(0) for x in generated])
 
@@ -69,7 +61,7 @@ def main():
 
     # load checkpoint first to discover expected k
     ck = torch.load(model_path, map_location="cpu")
-    # The layer in DrumLogisticRegression is 'linear', not 'fc'
+
     if "model_state" in ck and "linear.weight" in ck["model_state"]:
         k_expected = ck["model_state"]["linear.weight"].shape[0]
     else:
@@ -80,14 +72,13 @@ def main():
         k_expected = len(master_cols)
 
     # load the model
-    # The model expects a positional argument, not 'input_dim'
     model = DrumLogisticRegression(k_expected)
     load_model(model_path, model, map_location=device)
     model.to(device)
     model.eval()
     print("Model loaded and ready.")
 
-    # build master columns from the FULL dataset folder (to align columns as in training)
+    # build master columns from the FULL dataset folder
     master_columns = build_master_columns(data_folder)
 
     # for each selected file, load using master and generate

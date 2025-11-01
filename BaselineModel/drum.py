@@ -333,10 +333,10 @@ def generate_from_seed_groove(
                 else:
                     probs[0, i] = probs[0, i] * 0.9
 
-        probs = probs.clamp(0.0, 1.0)  # <- crucial!
+        probs = probs.clamp(0.0, 1.0)
         next_drums = torch.bernoulli(probs)
 
-        # --- add beat embedding for next step ---
+        # add beat embedding for next step
         t = context.shape[1]
         p8, p32, p128 = (t % 8) / 8.0, (t % 32) / 32.0, (t % 128) / 128.0
         beat_emb_next = torch.tensor([[
@@ -364,22 +364,17 @@ def generate_from_seed_groove(
 # ==================== Main =========================
 # ==================================================
 def main():
-    # --- Define Absolute Paths ---
-    # Get the directory where this script is located
     script_dir = os.path.dirname(os.path.abspath(__file__))
     
-    # Define all paths relative to the script's location
     data_folder = os.path.join(script_dir, "../RockBinary_Dataset/RockBinary_Dataset")
     model_path = os.path.join(script_dir, "models/drum_baseline.pt")
     out_folder = os.path.join(script_dir, "generated_samples")
-    
-    # Ensure the output directory exists
     os.makedirs(out_folder, exist_ok=True)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print("Device:", device)
 
-    # ---------- 1. Train ----------
+    # train
     print("Loading sequences from", data_folder)
     seqs = load_folder_as_sequences(data_folder, compress_window=2)
     print("Total sequences:", len(seqs))
@@ -410,17 +405,15 @@ def main():
             best_val = val_loss
             save_model(model_path, model, optimizer, epoch=epoch,
                        meta={"val_loss": val_loss, "metrics": val_metrics})
-            # Change the save path to a relative one inside your project
             np.save("models/master_columns_lr.npy", np.array(build_master_columns(data_folder)))
             print("master_columns saved.")
 
-    # ---------- 2. Generate ----------
-    # FIX: Use the correct argument name 'num_features' instead of 'input_dim'
+    # generate
     model = DrumLogisticRegression(num_features=k).to(device)
     load_model(model_path, model, map_location=device)
     model.to(device).eval()
     print("\nModel loaded for generation.")
-    # Change the load path to match the new save path
+    # change the load path to match the new save path
     master_columns = np.load("models/master_columns_lr.npy", allow_pickle=True).tolist()
     all_csv = [f for f in sorted(os.listdir(data_folder)) if f.endswith(".csv")]
     selected_files = random.sample(all_csv, min(10, len(all_csv)))
